@@ -161,15 +161,27 @@ def run_demo():
     print("=" * 60)
 
 
-def run_interactive(model_name: str = "gpt-4o-mini", strict_mode: bool = True):
-    """运行交互式聊天"""
+def run_interactive(model_name: str = "gpt-4o-mini", mode: str = "llm"):
+    """运行交互式聊天
+
+    Args:
+        model_name: 使用的模型
+        mode: 运行模式 - "llm" (LLM路由), "strict" (严格状态机), "free" (自由Agent)
+    """
     try:
         from rescue_chatbot.cards import render_card_to_text
 
-        mode_name = "严格状态机模式" if strict_mode else "自由 Agent 模式"
-        print(f"\n正在初始化聊天机器人 (模型: {model_name}, {mode_name})...")
+        mode_names = {
+            "llm": "LLM 智能路由模式（推荐）",
+            "strict": "严格状态机模式",
+            "free": "自由 Agent 模式"
+        }
+        print(f"\n正在初始化聊天机器人 (模型: {model_name}, {mode_names.get(mode, mode)})...")
 
-        if strict_mode:
+        if mode == "llm":
+            from rescue_chatbot.llm_routed_graph import LLMRoutedChatbot
+            chatbot = LLMRoutedChatbot(model_name=model_name)
+        elif mode == "strict":
             from rescue_chatbot.graph_strict import StrictRescueChatbot
             chatbot = StrictRescueChatbot(model_name=model_name)
         else:
@@ -181,7 +193,11 @@ def run_interactive(model_name: str = "gpt-4o-mini", strict_mode: bool = True):
         print("(输入 /help 查看命令帮助)\n")
 
         # 发送初始问候
-        if strict_mode:
+        if mode == "llm":
+            response, cards, decision = chatbot.chat("你好")
+            if decision:
+                print(f"  [路由决策] 意图={decision.get('user_intent')}, 动作={decision.get('next_action')}")
+        elif mode == "strict":
             response, cards = chatbot.chat("你好")
         else:
             response, state, cards = chatbot.chat("你好")
@@ -209,12 +225,22 @@ def run_interactive(model_name: str = "gpt-4o-mini", strict_mode: bool = True):
                         continue
                     elif cmd == "/reset":
                         chatbot.reset()
-                        if not strict_mode:
+                        if mode == "free":
                             state = chatbot.get_initial_state()
                         print("\n🔄 会话已重置\n")
                         continue
                     elif cmd == "/status":
-                        if strict_mode:
+                        if mode == "llm":
+                            status = chatbot.get_state()
+                            print(f"\n当前状态:")
+                            print(f"  动作: {status.get('current_action')}")
+                            print(f"  救援类型: {status.get('rescue_type') or '未选择'}")
+                            print(f"  电话: {status.get('phone') or '未提供'}")
+                            print(f"  地址: {status.get('address') or '未提供'}")
+                            if status.get('order_id'):
+                                print(f"  订单ID: {status['order_id']}")
+                                print(f"  金额: ¥{status.get('price', 0)}")
+                        elif mode == "strict":
                             print(f"\n当前阶段: {chatbot.get_current_stage()}")
                             print(f"救援类型: {chatbot.state.get('rescue_type', '未选择')}")
                             if chatbot.state.get('order_info'):
@@ -229,9 +255,19 @@ def run_interactive(model_name: str = "gpt-4o-mini", strict_mode: bool = True):
                     elif cmd == "/demo":
                         run_demo()
                         continue
+                    elif cmd == "/debug":
+                        if mode == "llm" and hasattr(chatbot, 'state') and chatbot.state.last_decision:
+                            print("\n[最近一次路由决策]")
+                            import json
+                            print(json.dumps(chatbot.state.last_decision, indent=2, ensure_ascii=False))
+                        continue
 
                 # 处理对话
-                if strict_mode:
+                if mode == "llm":
+                    response, cards, decision = chatbot.chat(user_input)
+                    if decision:
+                        print(f"  [路由] 意图={decision.get('user_intent')}, 动作={decision.get('next_action')}, 工具={decision.get('tool_to_call', 'none')}")
+                elif mode == "strict":
                     response, cards = chatbot.chat(user_input)
                 else:
                     response, state, cards = chatbot.chat(user_input, state)
@@ -266,8 +302,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 模式说明：
-  --strict (默认)  严格状态机模式：根据状态决定流程，不会跳步骤
-  --free           自由 Agent 模式：完全由 LLM 决定下一步（可能跳步骤）
+  (默认)           LLM 智能路由模式：LLM 判断意图并路由，图结构控制流程
+  --strict         严格状态机模式：硬编码状态转换，最可控
+  --free           自由 Agent 模式：完全由 LLM 决定（最灵活但可能跳步骤）
+
+调试命令：
+  /status          查看当前状态
+  /debug           查看最近一次路由决策（仅 LLM 模式）
         """
     )
     parser.add_argument(
@@ -282,12 +323,24 @@ def main():
         help="使用的模型 (默认: gpt-4o-mini)"
     )
     parser.add_argument(
-        "--free",
-        action="store_true",
-        help="使用自由 Agent 模式（LLM 自主决策）"
+        "--mode",
+        type=str,
+        choices=["llm", "strict", "free"],
+        default="llm",
+        help="运行模式: llm(默认), strict, free"
     )
+    # 保持向后兼容
+    parser.add_argument("--strict", action="store_true", help="使用严格状态机模式")
+    parser.add_argument("--free", action="store_true", help="使用自由 Agent 模式")
 
     args = parser.parse_args()
+
+    # 处理模式参数
+    mode = args.mode
+    if args.strict:
+        mode = "strict"
+    elif args.free:
+        mode = "free"
 
     print_banner()
 
@@ -305,7 +358,7 @@ def main():
                 run_demo()
             return
 
-        run_interactive(args.model, strict_mode=not args.free)
+        run_interactive(args.model, mode=mode)
 
 
 if __name__ == "__main__":
