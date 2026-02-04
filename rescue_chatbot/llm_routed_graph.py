@@ -135,7 +135,7 @@ ROUTER_PROMPT = """你是道路救援服务的智能路由器。根据对话上�
 - 用户说"车坏了/没电/爆胎/需要救援"等 → request_rescue
 - 用户提供电话/地址/车牌等信息 → provide_info
 - 用户说"确认/没问题/可以/下单/支付"等 → confirm
-- 用户说"不对/改一下/重新"等 → reject
+- 用户说"不对/改一下/重新/错了/手机号错了"等 → reject（要修改信息）
 - 用户说"取消/不要了"等 → cancel
 - 用户问"多少钱/多久到/订单状态"等 → query
 - 用户闲聊或无关内容 → chitchat
@@ -143,13 +143,17 @@ ROUTER_PROMPT = """你是道路救援服务的智能路由器。根据对话上�
 ### 动作决策
 1. 如果还没开始或用户刚请求救援 → collect_info
 2. 如果信息不完整（缺少 rescue_type/phone/address 任一）→ collect_info
-3. 如果信息完整但还没确认 → show_summary
-4. 如果用户确认了信息且没有订单 → create_order（需要调用 initiate_rescue_order）
-5. 如果有订单但未支付，且用户确认支付 → confirm_payment（需要调用 confirm_order_payment）
-6. 如果有订单未支付，用户还没确认 → wait_payment
-7. 如果用户要取消 → cancel_order（需要调用 cancel_rescue_order）
-8. 如果用户查询订单 → show_status（需要调用 query_order_status）
-9. 如果是闲聊或问题 → answer_question
+3. 【重要】如果用户说信息有误要修改（reject 意图）→ collect_info，并在 extracted_info 中标记要清空的字段
+   - 例如用户说"手机号错了"，设置 extracted_info.clear_phone = true，response 询问正确的手机号
+   - 例如用户说"地址不对"，设置 extracted_info.clear_address = true
+   - 如果用户同时提供了新信息（如"手机号错了，应该是138xxx"），直接更新 phone 字段
+4. 如果信息完整但还没确认 → show_summary
+5. 如果用户确认了信息且没有订单 → create_order（需要调用 initiate_rescue_order）
+6. 如果有订单但未支付，且用户确认支付 → confirm_payment（需要调用 confirm_order_payment）
+7. 如果有订单未支付，用户还没确认 → wait_payment
+8. 如果用户要取消 → cancel_order（需要调用 cancel_rescue_order）
+9. 如果用户查询订单 → show_status（需要调用 query_order_status）
+10. 如果是闲聊或问题 → answer_question
 
 ### 信息提取
 从用户输入中提取以下信息（如果有）：
@@ -227,7 +231,17 @@ def create_router_chain(llm):
 
         # 合并提取的信息
         for key, value in decision.extracted_info.items():
-            if value:
+            # 处理清空字段的请求（用户说"xxx错了"）
+            if key == "clear_phone" and value:
+                updates["customer_phone"] = None
+            elif key == "clear_address" and value:
+                updates["address"] = None
+            elif key == "clear_rescue_type" and value:
+                updates["rescue_type"] = None
+            elif key == "clear_plate" and value:
+                updates["plate_number"] = None
+            # 处理正常的信息更新
+            elif value:
                 if key == "rescue_type":
                     updates["rescue_type"] = value
                 elif key == "phone":
