@@ -161,21 +161,30 @@ def run_demo():
     print("=" * 60)
 
 
-def run_interactive(model_name: str = "gpt-4o-mini"):
+def run_interactive(model_name: str = "gpt-4o-mini", strict_mode: bool = True):
     """运行交互式聊天"""
     try:
-        from rescue_chatbot.graph import RescueChatbot
         from rescue_chatbot.cards import render_card_to_text
 
-        print(f"\n正在初始化聊天机器人 (模型: {model_name})...")
-        chatbot = RescueChatbot(model_name=model_name)
-        state = chatbot.get_initial_state()
+        mode_name = "严格状态机模式" if strict_mode else "自由 Agent 模式"
+        print(f"\n正在初始化聊天机器人 (模型: {model_name}, {mode_name})...")
+
+        if strict_mode:
+            from rescue_chatbot.graph_strict import StrictRescueChatbot
+            chatbot = StrictRescueChatbot(model_name=model_name)
+        else:
+            from rescue_chatbot.graph import RescueChatbot
+            chatbot = RescueChatbot(model_name=model_name)
+            state = chatbot.get_initial_state()
 
         print("\n✅ 初始化完成！开始对话吧~")
         print("(输入 /help 查看命令帮助)\n")
 
         # 发送初始问候
-        response, state, cards = chatbot.chat("你好")
+        if strict_mode:
+            response, cards = chatbot.chat("你好")
+        else:
+            response, state, cards = chatbot.chat("你好")
         print(f"\n🤖 助手: {response}\n")
 
         for card in cards:
@@ -199,15 +208,22 @@ def run_interactive(model_name: str = "gpt-4o-mini"):
                         print_help()
                         continue
                     elif cmd == "/reset":
-                        state = chatbot.get_initial_state()
                         chatbot.reset()
+                        if not strict_mode:
+                            state = chatbot.get_initial_state()
                         print("\n🔄 会话已重置\n")
                         continue
                     elif cmd == "/status":
-                        print(f"\n当前状态: {state.get('current_stage', 'unknown')}")
-                        print(f"救援类型: {state.get('rescue_type', '未选择')}")
-                        if state.get('order_info'):
-                            print(f"订单ID: {state['order_info'].order_id}")
+                        if strict_mode:
+                            print(f"\n当前阶段: {chatbot.get_current_stage()}")
+                            print(f"救援类型: {chatbot.state.get('rescue_type', '未选择')}")
+                            if chatbot.state.get('order_info'):
+                                print(f"订单ID: {chatbot.state['order_info'].order_id}")
+                        else:
+                            print(f"\n当前状态: {state.get('current_stage', 'unknown')}")
+                            print(f"救援类型: {state.get('rescue_type', '未选择')}")
+                            if state.get('order_info'):
+                                print(f"订单ID: {state['order_info'].order_id}")
                         print()
                         continue
                     elif cmd == "/demo":
@@ -215,7 +231,10 @@ def run_interactive(model_name: str = "gpt-4o-mini"):
                         continue
 
                 # 处理对话
-                response, state, cards = chatbot.chat(user_input, state)
+                if strict_mode:
+                    response, cards = chatbot.chat(user_input)
+                else:
+                    response, state, cards = chatbot.chat(user_input, state)
 
                 print(f"\n🤖 助手: {response}\n")
 
@@ -244,7 +263,12 @@ def main():
 
     parser = argparse.ArgumentParser(
         description="道路救援服务智能助手",
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+模式说明：
+  --strict (默认)  严格状态机模式：根据状态决定流程，不会跳步骤
+  --free           自由 Agent 模式：完全由 LLM 决定下一步（可能跳步骤）
+        """
     )
     parser.add_argument(
         "--demo",
@@ -256,6 +280,11 @@ def main():
         type=str,
         default="gpt-4o-mini",
         help="使用的模型 (默认: gpt-4o-mini)"
+    )
+    parser.add_argument(
+        "--free",
+        action="store_true",
+        help="使用自由 Agent 模式（LLM 自主决策）"
     )
 
     args = parser.parse_args()
@@ -276,7 +305,7 @@ def main():
                 run_demo()
             return
 
-        run_interactive(args.model)
+        run_interactive(args.model, strict_mode=not args.free)
 
 
 if __name__ == "__main__":
