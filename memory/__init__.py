@@ -11,13 +11,17 @@ memory — 独立记忆组件
 from .factory import (
     create_memory_manager,
     create_openai_memory_manager,
+    create_openai_milvus_memory_manager,
     create_openai_qdrant_memory_manager,
 )
 from .core.memory_manager import MemoryManager
 from .models import (
+    AddMemoryResult,
     ChannelType,
     CustomerProfile,
+    MemoryAction,
     MemoryItem,
+    MemoryOperation,
     MemoryQuery,
     MemorySearchResult,
     MemoryType,
@@ -28,14 +32,18 @@ __all__ = [
     # Factories
     "create_memory_manager",
     "create_openai_memory_manager",
+    "create_openai_milvus_memory_manager",
     "create_openai_qdrant_memory_manager",
     # Core
     "MemoryManager",
     # Models
     "MemoryItem",
     "MemoryType",
+    "MemoryAction",
+    "MemoryOperation",
     "MemoryQuery",
     "MemorySearchResult",
+    "AddMemoryResult",
     "CustomerProfile",
     "ChannelType",
     # Interfaces

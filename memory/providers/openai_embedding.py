@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import List
 
+import httpx
 from openai import AsyncOpenAI
 
 from ..base import BaseEmbeddingClient
@@ -16,8 +17,13 @@ class OpenAIEmbeddingClient(BaseEmbeddingClient):
         api_key: str,
         model: str = "text-embedding-3-small",
         base_url: str | None = None,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        self.client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=http_client,
+        )
         self.model = model
 
     async def embed(self, text: str) -> List[float]:

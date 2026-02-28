@@ -10,9 +10,12 @@ from typing import Any, Dict, List, Optional
 
 from ..base import BaseLLMClient, BaseEmbeddingClient, BaseVectorStore
 from ..models import (
+    AddMemoryResult,
     ChannelType,
     CustomerProfile,
+    MemoryAction,
     MemoryItem,
+    MemoryOperation,
     MemoryQuery,
     MemorySearchResult,
     MemoryType,
@@ -136,56 +139,129 @@ class MemoryManager:
         return [MemoryItem.from_store_payload(p) for p in payloads]
 
     # ------------------------------------------------------------------
-    # 高层操作：对话记忆提取（mem0 风格）
+    # 高层操作：对话记忆提取（mem0 风格，含 ADD/UPDATE/DELETE 决策）
     # ------------------------------------------------------------------
 
     async def add_from_conversation(
         self,
         user_id: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
+        conversation_time: Optional[datetime] = None,
+        source_channel: ChannelType = ChannelType.CHAT,
         extract_profile: bool = True,
-    ) -> List[MemoryItem]:
+        existing_memory_top_k: int = 15,
+    ) -> AddMemoryResult:
         """
-        从一段对话中提取记忆并持久化。
+        从一段对话中提取记忆，并智能决策 ADD / UPDATE / DELETE。
 
-        步骤：
-        1. 检索当前已有的近似记忆（用于让 LLM 去重）
-        2. LLM 提取新记忆片段
-        3. （可选）提取客户画像信息并更新
+        Args:
+            user_id:               用户标识
+            messages:              对话消息列表，每条含 role / content，
+                                   可附带 timestamp 字段（ISO 字符串）表示消息发送时间
+            conversation_time:     本次会话的时间（未提供时自动从 messages 中推断，
+                                   再不行则取当前时间）
+            source_channel:        来源渠道
+            extract_profile:       是否同步更新客户画像
+            existing_memory_top_k: 检索已有记忆的数量上限（给 LLM 决策参考）
+
+        Returns:
+            AddMemoryResult，包含本次新增/更新/删除的明细
         """
-        # 用最近几条消息做候选检索
+        # ---- 1. 推断会话时间 ----
+        conv_time = conversation_time or _infer_conversation_time(messages)
+        conv_time_str = conv_time.isoformat()
+
+        # ---- 2. 检索相关的已有记忆（给 LLM 决策用） ----
         recent_text = " ".join(
-            m.get("content", "") for m in messages[-4:] if m.get("content")
+            m.get("content", "") for m in messages[-6:] if m.get("content")
         )
         existing_results = await self.query(
-            MemoryQuery(user_id=user_id, query=recent_text, top_k=10)
-        )
-        existing_texts = [r.item.content for r in existing_results]
-
-        extracted = await self.llm.extract_memories(messages, existing_texts)
-
-        saved: List[MemoryItem] = []
-        for mem in extracted:
-            item = MemoryItem(
+            MemoryQuery(
                 user_id=user_id,
-                memory_type=MemoryType.CONVERSATIONAL,
-                content=mem["content"],
-                metadata=mem.get("metadata", {}),
-                source_channel=ChannelType.CHAT,
+                query=recent_text,
+                top_k=existing_memory_top_k,
+                memory_types=[MemoryType.CONVERSATIONAL],
             )
-            saved.append(await self.insert(item))
+        )
+        existing_for_llm = [
+            {"id": r.item.id, "content": r.item.content}
+            for r in existing_results
+        ]
 
+        # ---- 3. LLM 决策：ADD / UPDATE / DELETE / NONE ----
+        raw_ops = await self.llm.decide_memory_operations(
+            messages=messages,
+            existing_memories=existing_for_llm,
+            conversation_time=conv_time_str,
+        )
+
+        # ---- 4. 执行操作 ----
+        result = AddMemoryResult()
+        existing_map = {r.item.id: r.item for r in existing_results}
+
+        for op_dict in raw_ops:
+            try:
+                op = MemoryOperation(**op_dict)
+            except Exception as e:
+                logger.warning("Invalid operation dict %s: %s", op_dict, e)
+                continue
+
+            if op.action == MemoryAction.ADD and op.content:
+                item = MemoryItem(
+                    user_id=user_id,
+                    memory_type=MemoryType.CONVERSATIONAL,
+                    content=op.content,
+                    source_channel=source_channel,
+                    source_time=conv_time,
+                )
+                result.added.append(await self.insert(item))
+
+            elif op.action == MemoryAction.UPDATE and op.memory_id and op.content:
+                if op.memory_id not in existing_map:
+                    # id 对不上时降级为新增，避免静默丢弃
+                    logger.warning(
+                        "UPDATE target %s not in retrieved memories, downgrade to ADD",
+                        op.memory_id,
+                    )
+                    item = MemoryItem(
+                        user_id=user_id,
+                        memory_type=MemoryType.CONVERSATIONAL,
+                        content=op.content,
+                        source_channel=source_channel,
+                        source_time=conv_time,
+                    )
+                    result.added.append(await self.insert(item))
+                else:
+                    updated = await self.update(
+                        op.memory_id,
+                        {"content": op.content, "source_time": conv_time},
+                    )
+                    result.updated.append(updated)
+
+            elif op.action == MemoryAction.DELETE and op.memory_id:
+                await self.delete(op.memory_id)
+                result.deleted.append(op.memory_id)
+                logger.debug(
+                    "Deleted memory %s, reason: %s", op.memory_id, op.reason
+                )
+
+            # NONE: 无操作
+
+        # ---- 5. 可选：更新客户画像 ----
         if extract_profile:
             profile_data = await self.llm.extract_profile(messages)
             if any(v for v in profile_data.values() if v):
                 await self.update_customer_profile(user_id, profile_data)
 
         logger.info(
-            "Extracted %d memories from conversation for user %s",
-            len(saved),
+            "user=%s conv_time=%s | added=%d updated=%d deleted=%d",
             user_id,
+            conv_time_str,
+            len(result.added),
+            len(result.updated),
+            len(result.deleted),
         )
-        return saved
+        return result
 
     # ------------------------------------------------------------------
     # 高层操作：客户画像
@@ -300,6 +376,30 @@ class MemoryManager:
 # ------------------------------------------------------------------
 # 工具函数
 # ------------------------------------------------------------------
+
+def _infer_conversation_time(messages: List[Dict[str, Any]]) -> datetime:
+    """
+    从消息列表中推断会话时间。
+
+    优先取消息里最晚的 timestamp 字段；若消息均无时间戳则返回当前时间。
+    timestamp 支持 ISO 字符串或 datetime 对象。
+    """
+    latest: Optional[datetime] = None
+    for msg in messages:
+        ts = msg.get("timestamp")
+        if ts is None:
+            continue
+        if isinstance(ts, datetime):
+            dt = ts
+        else:
+            try:
+                dt = datetime.fromisoformat(str(ts))
+            except ValueError:
+                continue
+        if latest is None or dt > latest:
+            latest = dt
+    return latest or datetime.utcnow()
+
 
 def _profile_to_text(profile: CustomerProfile) -> str:
     parts = []

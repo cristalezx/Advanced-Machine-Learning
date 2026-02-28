@@ -27,6 +27,32 @@ class BaseLLMClient(ABC):
             记忆条目列表，每条至少含 {"content": "..."} 字段
         """
 
+    async def decide_memory_operations(
+        self,
+        messages: List[Dict[str, Any]],
+        existing_memories: List[Dict[str, Any]],
+        conversation_time: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        分析对话，决定对已有记忆库做 ADD / UPDATE / DELETE / NONE 操作。
+
+        Args:
+            messages:          对话消息列表，每条含 role/content，可选 timestamp 字段
+            existing_memories: 已有记忆列表，每条含 {"id": ..., "content": ...}
+            conversation_time: 本次会话的时间标识（ISO 字符串），用于提供时序上下文
+
+        Returns:
+            操作列表，每条为 dict，对应 MemoryOperation 字段:
+            {"action": "ADD"|"UPDATE"|"DELETE"|"NONE",
+             "content": ..., "memory_id": ..., "reason": ...}
+
+        默认实现: 回退到 extract_memories，全部视为 ADD（兼容旧实现）。
+        子类应覆盖此方法以获得完整的 UPDATE/DELETE 能力。
+        """
+        existing_texts = [m["content"] for m in existing_memories]
+        extracted = await self.extract_memories(messages, existing_texts)
+        return [{"action": "ADD", "content": m["content"]} for m in extracted]
+
     @abstractmethod
     async def extract_profile(
         self,
