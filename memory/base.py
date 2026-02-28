@@ -75,6 +75,23 @@ class BaseLLMClient(ABC):
         将已有记忆与新信息合并为单条更新后的记忆文本。
         """
 
+    async def evaluate_outreach(
+        self,
+        system_prompt: str,
+        user_content: str,
+    ) -> Any:
+        """
+        评估是否需要主动触达客户，返回 OutreachDecision。
+
+        默认实现：不触达（兼容未实现此方法的子类）。
+        OpenAILLMClient 会覆盖此方法以使用 LLM 决策。
+        """
+        from memory.core.event_bus import OutreachDecision
+        return OutreachDecision(
+            should_reach_out=False,
+            reason="LLM 客户端未实现 evaluate_outreach",
+        )
+
 
 class BaseEmbeddingClient(ABC):
     """Embedding 接口：文本向量化。"""

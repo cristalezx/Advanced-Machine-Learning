@@ -19,10 +19,15 @@ LangGraph 集成 — 提供开箱即用的记忆检索和保存节点。
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional
+import asyncio
+import logging
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from ..core.memory_manager import MemoryManager
-from ..models import MemoryQuery, MemoryType
+from ..models import ChannelType, MemoryQuery, MemoryType
+
+logger = logging.getLogger(__name__)
 
 # LangGraph / LangChain 是可选依赖，按需导入
 try:
@@ -51,6 +56,7 @@ class MemoryState(TypedDict, total=False):
     user_id: str
     retrieved_memories: List[str]   # 检索到的记忆文本列表
     memory_context: str             # 格式化后可直接注入 system prompt 的记忆上下文
+    conversation_time: Optional[str]  # ISO 时间字符串，可由外部注入
 
 
 # ------------------------------------------------------------------
@@ -110,9 +116,10 @@ def create_memory_save_node(
     extract_profile: bool = True,
 ) -> Callable[[Dict], Dict]:
     """
-    创建「记忆保存」节点。
+    创建「记忆保存」节点（阻塞版）。
 
     在对话结束后调用，将本轮对话提取并保存到向量库。
+    适合对记忆保存有强一致性要求的场景（保存完成才继续下一节点）。
     """
 
     async def save_memories(state: Dict) -> Dict:
@@ -131,6 +138,87 @@ def create_memory_save_node(
         return {}
 
     return save_memories
+
+
+def create_async_memory_save_node(
+    memory_manager: MemoryManager,
+    extract_profile: bool = True,
+    source_channel: ChannelType = ChannelType.CHAT,
+    event_bus: Optional[Any] = None,
+    error_handler: Optional[Callable[[Exception], None]] = None,
+) -> Callable[[Dict], Awaitable[Dict]]:
+    """
+    创建「异步记忆保存」节点（非阻塞，fire-and-forget）。
+
+    节点立即返回，记忆提取和保存在后台 asyncio.Task 中执行，
+    不阻塞 LangGraph 主流程，适合对响应延迟敏感的场景。
+
+    Args:
+        memory_manager:  MemoryManager 实例
+        extract_profile: 是否同步更新客户画像
+        source_channel:  来源渠道
+        event_bus:       MemoryEventBus 实例，有变更时自动 publish 事件
+                         （ProactiveOutreachEvaluator 可订阅此总线）
+        error_handler:   后台任务出错时的回调 handler(exc)，
+                         默认仅打印 ERROR 日志
+
+    Returns:
+        LangGraph 节点函数，签名 async (state) -> {}
+    """
+    async def save_memories_async(state: Dict) -> Dict:
+        messages = state.get("messages", [])
+        user_id = state.get("user_id", "anonymous")
+        conv_time_str = state.get("conversation_time")
+
+        msg_dicts = _messages_to_dicts(messages)
+        if not msg_dicts:
+            return {}
+
+        # 从 state 中解析会话时间（由调用方注入，或在后台自动推断）
+        conv_time: Optional[datetime] = None
+        if conv_time_str:
+            try:
+                conv_time = datetime.fromisoformat(conv_time_str)
+            except ValueError:
+                pass
+
+        async def _do_save() -> None:
+            try:
+                result = await memory_manager.add_from_conversation(
+                    user_id=user_id,
+                    messages=msg_dicts,
+                    conversation_time=conv_time,
+                    source_channel=source_channel,
+                    extract_profile=extract_profile,
+                )
+                # 有变更且配置了事件总线，则发布事件
+                if event_bus is not None and result.total_changes > 0:
+                    from ..core.event_bus import MemoryChangeEvent
+                    event = MemoryChangeEvent(
+                        user_id=user_id,
+                        result=result,
+                        channel=source_channel,
+                        conversation_time=conv_time or datetime.utcnow(),
+                    )
+                    await event_bus.publish(event)
+                    logger.debug(
+                        "Published MemoryChangeEvent for user=%s (changes=%d)",
+                        user_id,
+                        result.total_changes,
+                    )
+            except Exception as exc:
+                if error_handler:
+                    error_handler(exc)
+                else:
+                    logger.error(
+                        "Async memory save failed for user=%s: %s", user_id, exc
+                    )
+
+        # 调度后台任务，立即返回不等待
+        asyncio.create_task(_do_save())
+        return {}
+
+    return save_memories_async
 
 
 # ------------------------------------------------------------------

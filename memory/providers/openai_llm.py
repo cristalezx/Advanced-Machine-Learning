@@ -195,6 +195,30 @@ class OpenAILLMClient(BaseLLMClient):
             logger.warning("Failed to parse decide_memory_operations response: %s", e)
             return []
 
+    async def evaluate_outreach(
+        self,
+        system_prompt: str,
+        user_content: str,
+    ) -> Any:
+        """调用 LLM 评估是否需要主动触达客户，返回 OutreachDecision。"""
+        from memory.core.event_bus import OutreachDecision
+
+        resp = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        try:
+            data = json.loads(resp.choices[0].message.content)
+            return OutreachDecision(**data)
+        except Exception as e:
+            logger.warning("Failed to parse evaluate_outreach response: %s", e)
+            return OutreachDecision(should_reach_out=False, reason="解析失败")
+
     async def merge_memory(self, existing: str, new_info: str) -> str:
         resp = await self.client.chat.completions.create(
             model=self.model,
