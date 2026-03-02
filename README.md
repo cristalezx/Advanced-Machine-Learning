@@ -53,7 +53,7 @@ pip install -r requirements.txt
 
 # 按需选择向量库
 pip install qdrant-client>=1.9    # Qdrant
-pip install pymilvus>=2.5         # Milvus 2.4+ / 3.x
+pip install pymilvus>=2.4         # Milvus server 2.3+
 ```
 
 ### 基础用法
@@ -246,7 +246,7 @@ manager = create_openai_qdrant_memory_manager(
 docker run -p 6333:6333 qdrant/qdrant
 ```
 
-### Milvus（2.4+ / 3.x）
+### Milvus（server 2.3+）
 
 ```python
 from memory import create_openai_milvus_memory_manager
@@ -260,12 +260,15 @@ manager = create_openai_milvus_memory_manager(
 ```
 
 ```bash
-# Milvus 2.x
-docker run -p 19530:19530 milvusdb/milvus:v2.4.0 milvus run standalone
+# Milvus 2.3
+docker run -p 19530:19530 milvusdb/milvus:v2.3.0 milvus run standalone
 
-# Milvus Lite（本地文件，适合开发）
+# Milvus Lite（本地文件，适合开发，pymilvus 附带）
 milvus_uri="path/to/local.db"
 ```
+
+> **实现说明**：使用同步 `MilvusClient`（pymilvus ≥ 2.4）经 `asyncio.to_thread()` 桥接，
+> 兼容 Milvus server 2.3+，无需 `AsyncMilvusClient`（pymilvus 2.5+ 特性）。
 
 ---
 
