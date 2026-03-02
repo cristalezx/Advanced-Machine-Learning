@@ -4,7 +4,9 @@ openai>=1.0          # LLM + Embedding（可替换为其他兼容 API）
 
 # 向量库（按需选一）
 qdrant-client>=1.9   # 生产推荐（Qdrant）
-pymilvus>=2.4        # Milvus server 2.3+（MilvusClient + asyncio.to_thread 桥接）
+pymilvus~=2.3.7      # Milvus server 2.3.x（MilvusClient 首次引入于 2.3.7）
+# 若使用 Milvus 2.4.x server，将上行改为 pymilvus~=2.4.0
+# 若使用 Milvus 2.5.x server，将上行改为 pymilvus~=2.5.0
 
 # API 服务（可选）
 fastapi>=0.110

@@ -2,7 +2,13 @@
 Milvus 向量存储实现，兼容 Milvus server 2.3+。
 
 依赖:
-    pymilvus >= 2.4   （含 MilvusClient 高级 API）
+    pymilvus ~= 2.3.7  （MilvusClient 于 2.3.7 首次引入）
+
+    ⚠️  pymilvus 与 Milvus server 必须大版本一致，否则报
+        "sdk is incompatible with server" 错误：
+        Milvus server 2.3.x → pymilvus ~= 2.3.7
+        Milvus server 2.4.x → pymilvus ~= 2.4.0
+        Milvus server 2.5.x → pymilvus ~= 2.5.0
 
 实现方式:
     使用同步 MilvusClient，通过 asyncio.to_thread() 桥接至 async 接口。
@@ -15,11 +21,6 @@ Collection Schema:
     user_id      VARCHAR(256)   过滤字段
     memory_type  VARCHAR(64)    过滤字段
     payload_json JSON           完整 payload 序列化存储
-
-兼容性:
-    - Milvus server 2.3+（upsert 在 2.3.0 正式支持）
-    - Milvus Lite（本地 .db 文件，适合开发测试）
-    - pymilvus >= 2.4（MilvusClient 高级 API，向下兼容 Milvus 2.3 server）
 """
 from __future__ import annotations
 

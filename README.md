@@ -53,7 +53,7 @@ pip install -r requirements.txt
 
 # 按需选择向量库
 pip install qdrant-client>=1.9    # Qdrant
-pip install pymilvus>=2.4         # Milvus server 2.3+
+pip install "pymilvus~=2.3.7"     # Milvus server 2.3.x（版本必须与 server 一致）
 ```
 
 ### 基础用法
@@ -267,8 +267,17 @@ docker run -p 19530:19530 milvusdb/milvus:v2.3.0 milvus run standalone
 milvus_uri="path/to/local.db"
 ```
 
-> **实现说明**：使用同步 `MilvusClient`（pymilvus ≥ 2.4）经 `asyncio.to_thread()` 桥接，
-> 兼容 Milvus server 2.3+，无需 `AsyncMilvusClient`（pymilvus 2.5+ 特性）。
+> ⚠️ **版本必须匹配**：pymilvus 与 Milvus server 大版本号必须一致，不一致会报
+> `sdk is incompatible with server` 错误。
+>
+> | Milvus server | pymilvus |
+> |---|---|
+> | 2.3.x | `~=2.3.7` |
+> | 2.4.x | `~=2.4.0` |
+> | 2.5.x | `~=2.5.0` |
+>
+> **实现说明**：使用同步 `MilvusClient`（pymilvus 2.3.7+ 引入）经 `asyncio.to_thread()` 桥接，
+> 不依赖 `AsyncMilvusClient`（仅 pymilvus 2.5+ 特性）。
 
 ---
 
